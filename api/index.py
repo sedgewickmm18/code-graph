@@ -117,6 +117,8 @@ app = FastAPI()
 async def graph_entities(repo: str = Query(None), branch: Optional[str] = Query(None), _=Depends(public_or_auth)):
     """Fetch sub-graph entities from a given repository."""
 
+    print("CALLED WITH", repo, branch)
+
     if not repo:
         logging.error("Missing 'repo' parameter in request.")
         return JSONResponse({"status": "Missing 'repo' parameter"}, status_code=400)
@@ -124,15 +126,18 @@ async def graph_entities(repo: str = Query(None), branch: Optional[str] = Query(
     g = AsyncGraphQuery(repo, branch=branch)
     try:
         if not await g.graph_exists():
+            print("GRAPH EXIST FAILURE", repo)
             logging.error("Missing project %s (branch=%s)", repo, g.branch)
             return JSONResponse({"status": f"Missing project {repo}"}, status_code=400)
 
-        sub_graph = await g.get_sub_graph(500)
+        print("GRAPH QUERY")
+        sub_graph = await g.get_sub_graph(50000)
 
         logging.info("Successfully retrieved sub-graph for repo: %s (branch=%s)", repo, g.branch)
         return {"status": "success", "branch": g.branch, "entities": sub_graph}
 
     except Exception as e:
+        print("GRAPH QUERY FAILURE", repo, e)
         logging.exception("Error retrieving sub-graph for repo '%s': %s", repo, e)
         return JSONResponse({"status": "Internal server error"}, status_code=500)
     finally:

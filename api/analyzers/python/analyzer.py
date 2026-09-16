@@ -35,15 +35,15 @@ class PythonAnalyzer(TreeSitterAnalyzer):
 
     def __init__(self) -> None:
         super().__init__(Language(tspython.language()))
-        # Resolver selection: 'tree_sitter' opts into the static project-wide
-        # resolver (issue #689). Default is the historical jedi/LSP path so
-        # behaviour is unchanged until explicitly enabled.
-        resolver_choice = os.environ.get(_RESOLVER_ENV, "").strip().lower()
-        if resolver_choice == _RESOLVER_TREE_SITTER:
+        # Resolver selection: defaults to 'tree_sitter' static project-wide resolver
+        # for fast sub-second indexing without virtualenv/LSP overhead.
+        # Set CODE_GRAPH_PY_RESOLVER=jedi or CODE_GRAPH_PY_RESOLVER=lsp to force historical LSP mode.
+        resolver_choice = os.environ.get(_RESOLVER_ENV, _RESOLVER_TREE_SITTER).strip().lower()
+        if resolver_choice in (_RESOLVER_TREE_SITTER, ""):
             self._ts_resolver: Optional[TreeSitterPythonResolver] = (
                 TreeSitterPythonResolver(self.language)
             )
-            logger.info("PythonAnalyzer: tree-sitter static resolver enabled")
+            logger.info("PythonAnalyzer: tree-sitter static resolver enabled (default)")
         else:
             self._ts_resolver = None
 

@@ -439,9 +439,18 @@ def test_python_analyzer_disables_lsp_under_tree_sitter_env():
         assert a.needs_lsp() is False
 
 
-def test_python_analyzer_default_still_uses_jedi():
+def test_python_analyzer_default_uses_tree_sitter():
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("CODE_GRAPH_PY_RESOLVER", None)
+        from api.analyzers.python.analyzer import PythonAnalyzer
+
+        a = PythonAnalyzer()
+        assert a._ts_resolver is not None
+        assert a.needs_lsp() is False
+
+
+def test_python_analyzer_can_opt_into_jedi():
+    with mock.patch.dict(os.environ, {"CODE_GRAPH_PY_RESOLVER": "jedi"}, clear=False):
         from api.analyzers.python.analyzer import PythonAnalyzer
 
         a = PythonAnalyzer()

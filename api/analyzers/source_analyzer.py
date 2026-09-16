@@ -168,12 +168,18 @@ class SourceAnalyzer():
         logger = MultilspyLogger()
         logger.logger.setLevel(logging.ERROR)
         lsps = {}
-        if any(path.rglob('*.java')):
+        # Only start LSPs for languages present in the candidate `files` list
+        has_java = any(f.suffix == '.java' for f in files)
+        has_py = any(f.suffix == '.py' for f in files)
+        has_cs = any(f.suffix == '.cs' for f in files)
+
+        if has_java and analyzers.get(".java") and analyzers[".java"].needs_lsp():
             config = MultilspyConfig.from_dict({"code_language": "java"})
             lsps[".java"] = SyncLanguageServer.create(config, logger, str(path))
         else:
             lsps[".java"] = NullLanguageServer()
-        if any(path.rglob('*.py')) and analyzers[".py"].needs_lsp():
+
+        if has_py and analyzers.get(".py") and analyzers[".py"].needs_lsp():
             py_venv = path / "venv"
             py_dotvenv = path / ".venv"
             if py_venv.is_dir() and (py_venv / "bin" / "python").exists():
@@ -181,13 +187,6 @@ class SourceAnalyzer():
             elif py_dotvenv.is_dir() and (py_dotvenv / "bin" / "python").exists():
                 env_path = str(py_dotvenv)
             else:
-                # Fall back to the host's Python environment so jedi has a
-                # valid interpreter to introspect; otherwise every
-                # request_definition() raises InvalidPythonEnvironment and
-                # we'd silently produce a graph with zero CALLS edges.
-                # sys.prefix is the active environment root and is more
-                # reliable than deriving it from sys.executable (which breaks
-                # when the interpreter is a wrapper/shim).
                 env_path = sys.prefix
                 logging.info(
                     "No venv at %s; falling back to host env %s for jedi LSP",
@@ -200,7 +199,9 @@ class SourceAnalyzer():
             lsps[".py"] = SyncLanguageServer.create(config, logger, str(path))
         else:
             lsps[".py"] = NullLanguageServer()
-        if any(path.rglob('*.cs')):
+
+        import shutil
+        if has_cs and analyzers.get(".cs") and analyzers[".cs"].needs_lsp() and (shutil.which("dotnet") or shutil.which("mono")):
             config = MultilspyConfig.from_dict({"code_language": "csharp"})
             lsps[".cs"] = SyncLanguageServer.create(config, logger, str(path))
         else:
@@ -292,9 +293,16 @@ class SourceAnalyzer():
                     if done % log_every == 0 or done == total:
                         logging.info("second_pass: resolved %d/%d files", done, total)
 
-            # Phase B: serial edge writes, in the original file order so
-            # the graph is bit-identical to the single-threaded path. Files
-            # whose resolution failed are skipped (see phase A).
+            # Phase B: serial edge writes batched per relationship type, in the
+            # original file order so the graph is bit-identical to the single-threaded path.
+            # Files whose resolution failed are skipped (see phase A).
+            edges_by_rel: dict[str, list[tuple[int, int]]] = {
+                "EXTENDS": [],
+                "IMPLEMENTS": [],
+                "CALLS": [],
+                "RETURNS": [],
+                "PARAMETERS": [],
+            }
             for file_path in resolvable:
                 if file_path in failed:
                     continue
@@ -302,18 +310,20 @@ class SourceAnalyzer():
                 for _, entity in file.entities.items():
                     for key, resolved_set in entity.resolved_symbols.items():
                         for resolved in resolved_set:
-                            if key == "base_class":
-                                graph.connect_entities("EXTENDS", entity.id, resolved.id)
+                            if key in ("base_class", "extend_interface"):
+                                edges_by_rel["EXTENDS"].append((entity.id, resolved.id))
                             elif key == "implement_interface":
-                                graph.connect_entities("IMPLEMENTS", entity.id, resolved.id)
-                            elif key == "extend_interface":
-                                graph.connect_entities("EXTENDS", entity.id, resolved.id)
+                                edges_by_rel["IMPLEMENTS"].append((entity.id, resolved.id))
                             elif key == "call":
-                                graph.connect_entities("CALLS", entity.id, resolved.id)
+                                edges_by_rel["CALLS"].append((entity.id, resolved.id))
                             elif key == "return_type":
-                                graph.connect_entities("RETURNS", entity.id, resolved.id)
+                                edges_by_rel["RETURNS"].append((entity.id, resolved.id))
                             elif key == "parameters":
-                                graph.connect_entities("PARAMETERS", entity.id, resolved.id)
+                                edges_by_rel["PARAMETERS"].append((entity.id, resolved.id))
+
+            for rel, pairs in edges_by_rel.items():
+                if pairs:
+                    graph.connect_entities_batch(rel, pairs)
 
     def link_imports(self, graph: Graph, root: Path) -> None:
         """Add ``IMPORTS`` edges (File -> File) via per-language resolution.
@@ -323,6 +333,7 @@ class SourceAnalyzer():
         implement import resolution are silently skipped.
         """
         indices: dict[str, object] = {}
+        import_pairs: list[tuple[int, int]] = []
         for file_path, file in self.files.items():
             analyzer = analyzers.get(file_path.suffix)
             if analyzer is None:
@@ -335,7 +346,9 @@ class SourceAnalyzer():
             for target in analyzer.resolve_imports(file, root, index):
                 if getattr(file, "id", None) is None or getattr(target, "id", None) is None:
                     continue
-                graph.connect_entities("IMPORTS", file.id, target.id)
+                import_pairs.append((file.id, target.id))
+        if import_pairs:
+            graph.connect_entities_batch("IMPORTS", import_pairs)
 
     def analyze_files(self, files: list[Path], path: Path, graph: Graph) -> None:
         self.first_pass(path, files, [], graph)
@@ -345,7 +358,14 @@ class SourceAnalyzer():
 
     def analyze_sources(self, path: Path, ignore: list[str], graph: Graph) -> None:
         path = path.resolve()
-        files = list(path.rglob("*.java")) + list(path.rglob("*.py")) + list(path.rglob("*.cs")) + [f for f in path.rglob("*.js") if "node_modules" not in f.parts] + list(path.rglob("*.kt")) + list(path.rglob("*.kts"))
+        raw_files = list(path.rglob("*.java")) + list(path.rglob("*.py")) + list(path.rglob("*.cs")) + list(path.rglob("*.js")) + list(path.rglob("*.kt")) + list(path.rglob("*.kts"))
+        # Filter ignored patterns upfront
+        default_ignore = [".git", "node_modules", "venv", ".venv", "__pycache__", "build", "dist", ".tox", "site-packages"]
+        combined_ignore = list(set(ignore + default_ignore))
+        files = [
+            f for f in raw_files
+            if not any(ign in str(f) or ign in f.parts for ign in combined_ignore)
+        ]
         # First pass analysis of the source code
         self.first_pass(path, files, ignore, graph)
 

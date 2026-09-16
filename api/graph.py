@@ -599,6 +599,31 @@ class Graph():
         params = {'src_id': src_id, 'dest_id': dest_id, "properties": properties}
         self._query(q, params)
 
+    def connect_entities_batch(self, relation: str, pairs: list[tuple[int, int]], properties: Optional[dict] = None) -> None:
+        """
+        Establish relationships in bulk between pairs of src and dest node IDs.
+
+        Args:
+            relation (str): Edge label (e.g., 'CALLS', 'DEFINES', 'EXTENDS').
+            pairs (list[tuple[int, int]]): List of (src_id, dest_id) tuples.
+            properties (Optional[dict]): Properties to set on each created edge.
+        """
+        if not pairs:
+            return
+
+        q = f"""UNWIND $batch AS edge
+                MATCH (src), (dest)
+                WHERE ID(src) = edge.src AND ID(dest) = edge.dest
+                MERGE (src)-[e:{relation}]->(dest)
+                SET e += $props
+                RETURN count(e)"""
+
+        props = properties or {}
+        batch_size = 1000
+        for i in range(0, len(pairs), batch_size):
+            chunk = [{'src': p[0], 'dest': p[1]} for p in pairs[i:i + batch_size]]
+            self._query(q, {'batch': chunk, 'props': props})
+
     def derive_overrides(self, max_depth: int = 3) -> int:
         """
         Derive ``OVERRIDES`` edges from the existing class hierarchy.
@@ -839,6 +864,7 @@ class AsyncGraphQuery:
     async def graph_exists(self) -> bool:
         """Check if this graph exists, reusing the current connection."""
         graphs = await self.db.list_graphs()
+        print("GRAPHS", graphs, self.name, self.name in graphs)
         return self.name in graphs
 
     async def _query(self, q: str, params: Optional[dict] = None):
