@@ -2,7 +2,7 @@
 
 These tests prove the bare module is wired correctly:
 
-1. The FastMCP ``app`` instance is importable.
+1. The MCPServer ``app`` instance is importable.
 2. The ``cgraph-mcp`` console script spawns a working stdio MCP server.
 3. A client can complete the MCP handshake and ``list_tools`` returns 0
    tools (no tools are registered yet — they land in T4-T8, T11).
@@ -30,7 +30,7 @@ def anyio_backend() -> str:
 
 
 def test_app_is_importable() -> None:
-    """The FastMCP instance can be imported and is named ``code-graph``."""
+    """The MCPServer instance can be imported and is named ``code-graph``."""
     from api.mcp.server import app
 
     assert app is not None

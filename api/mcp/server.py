@@ -1,6 +1,6 @@
-"""FastMCP server for code-graph.
+"""MCPServer for code-graph.
 
-This is the scaffold (T1). It instantiates a single FastMCP app, exposes it
+This is the scaffold (T1). It instantiates a single MCPServer app, exposes it
 as ``app`` for tests and embedders, and registers a ``main()`` entry point
 that runs the server over stdio. Tools are registered in later tickets
 (T4-T8, T11) by importing this module's ``app`` and decorating functions
@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 logger = logging.getLogger(__name__)
 
-app: FastMCP = FastMCP("code-graph")
+app: MCPServer = MCPServer("code-graph")
 
 # Register tools on import so both direct ``import api.mcp.server`` and the
 # stdio entry point see the same tool list. Imported below ``app`` because

@@ -196,6 +196,12 @@ make install-cli
 uv pip install -e .
 ```
 
+### Start with
+
+```
+uv run ./start.sh 
+```
+
 ### Usage
 
 ```bash
