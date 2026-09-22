@@ -9,9 +9,11 @@ from ..graph import Graph
 from .analyzer import AbstractAnalyzer
 # from .c.analyzer import CAnalyzer
 from .csharp.analyzer import CSharpAnalyzer
+from .html.analyzer import HtmlAnalyzer
 from .java.analyzer import JavaAnalyzer
 from .javascript.analyzer import JavaScriptAnalyzer
 from .kotlin.analyzer import KotlinAnalyzer
+from .markdown.analyzer import MarkdownAnalyzer
 from .python.analyzer import PythonAnalyzer
 
 from multilspy import SyncLanguageServer
@@ -23,7 +25,11 @@ import sys
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(filename)s - %(asctime)s - %(levelname)s - %(message)s')
 
-# List of available analyzers
+# Singleton instances
+_html_analyzer = HtmlAnalyzer()
+_markdown_analyzer = MarkdownAnalyzer()
+
+# List of available analyzers (AbstractAnalyzer subclasses)
 analyzers: dict[str, AbstractAnalyzer] = {
     # '.c': CAnalyzer(),
     # '.h': CAnalyzer(),
@@ -32,7 +38,11 @@ analyzers: dict[str, AbstractAnalyzer] = {
     '.cs': CSharpAnalyzer(),
     '.js': JavaScriptAnalyzer(),
     '.kt': KotlinAnalyzer(),
-    '.kts': KotlinAnalyzer()}
+    '.kts': KotlinAnalyzer(),
+    '.html': _html_analyzer,
+    '.jinja2': _html_analyzer,
+    '.j2': _html_analyzer,
+}
 
 class NullLanguageServer:
     def start_server(self):
@@ -79,6 +89,77 @@ class SourceAnalyzer():
                 self.create_entity_hierarchy(entity, file, analyzer, graph)
             else:
                 stack.extend(node.children)
+
+    # ------------------------------------------------------------------
+    # Security entity passes (T2, T4, T5, T6)
+    # ------------------------------------------------------------------
+
+    def security_pass(self, graph: Graph, files: list[Path], path: Path) -> None:
+        """Persist Decorator, Variable, FileSystemOp nodes for every Python function.
+
+        Must run after first_pass so that entity.id values are available.
+        Markdown files are also processed here.
+        """
+        from .python.analyzer import PythonAnalyzer as _PyAnalyzer
+
+        for file_path in files:
+            # --- Markdown (T5) ---
+            if file_path.suffix == ".md":
+                try:
+                    _markdown_analyzer.analyze_file(file_path, graph)
+                except Exception:
+                    logging.warning("security_pass: markdown failed for %s", file_path, exc_info=True)
+                continue
+
+            # --- Python security entities (T2, T4, T6) ---
+            if file_path not in self.files:
+                continue
+            analyzer = analyzers.get(file_path.suffix)
+            if not isinstance(analyzer, _PyAnalyzer):
+                continue
+            if analyzer.is_dependency(str(file_path)):
+                continue
+
+            file = self.files[file_path]
+            for _, entity in file.entities.items():
+                if entity.node.type != "function_definition":
+                    continue
+                func_id = getattr(entity, "id", None)
+                if func_id is None:
+                    continue
+                try:
+                    analyzer.persist_security_entities(entity, file_path, graph, func_id)
+                except Exception:
+                    logging.warning(
+                        "security_pass: persist failed for %s in %s",
+                        analyzer.get_entity_name(entity.node), file_path,
+                        exc_info=True,
+                    )
+
+        # --- HTML / Jinja2 template refs (T4 INJECTED_INTO edges) ---
+        self._link_template_injections(graph)
+
+    def _link_template_injections(self, graph: Graph) -> None:
+        """Wire Variable -[:INJECTED_INTO]-> HtmlElement edges.
+
+        For each template reference collected by HtmlAnalyzer, look up the
+        Variable node by name and connect it.
+        """
+        for file_path, file in self.files.items():
+            if file_path.suffix not in (".html", ".jinja2", ".j2"):
+                continue
+            for entity_node, entity in file.entities.items():
+                var_names = _html_analyzer.template_refs.get(entity_node.id, [])
+                elem_id = getattr(entity, "id", None)
+                if elem_id is None or not var_names:
+                    continue
+                for var_name in var_names:
+                    # Find the Variable node by name
+                    q = "MATCH (v:Variable {name: $name}) RETURN v"
+                    res = graph._query(q, {"name": var_name}).result_set
+                    for row in res:
+                        var_id = row[0].id
+                        graph.link_variable_to_element(var_id, elem_id)
 
     def first_pass(self, path: Path, files: list[Path], ignore: list[str], graph: Graph) -> None:
         """
@@ -355,10 +436,22 @@ class SourceAnalyzer():
         self.link_imports(graph, path)
         self.second_pass(graph, files, path)
         graph.derive_overrides()
+        self.security_pass(graph, files, path)
 
     def analyze_sources(self, path: Path, ignore: list[str], graph: Graph) -> None:
         path = path.resolve()
-        raw_files = list(path.rglob("*.java")) + list(path.rglob("*.py")) + list(path.rglob("*.cs")) + list(path.rglob("*.js")) + list(path.rglob("*.kt")) + list(path.rglob("*.kts"))
+        raw_files = (
+            list(path.rglob("*.java"))
+            + list(path.rglob("*.py"))
+            + list(path.rglob("*.cs"))
+            + list(path.rglob("*.js"))
+            + list(path.rglob("*.kt"))
+            + list(path.rglob("*.kts"))
+            + list(path.rglob("*.html"))
+            + list(path.rglob("*.jinja2"))
+            + list(path.rglob("*.j2"))
+            + list(path.rglob("*.md"))
+        )
         # Filter ignored patterns upfront
         default_ignore = [".git", "node_modules", "venv", ".venv", "__pycache__", "build", "dist", ".tox", "site-packages"]
         combined_ignore = list(set(ignore + default_ignore))
@@ -367,7 +460,7 @@ class SourceAnalyzer():
             if not any(ign in str(f) or ign in f.parts for ign in combined_ignore)
         ]
         # First pass analysis of the source code
-        self.first_pass(path, files, ignore, graph)
+        self.first_pass(path, files, combined_ignore, graph)
 
         # Link import edges (syntactic, language-specific, no LSP)
         self.link_imports(graph, path)
@@ -377,6 +470,9 @@ class SourceAnalyzer():
 
         # Derive override edges from the resolved class hierarchy
         graph.derive_overrides()
+
+        # Security entity pass: decorators, variables, FS ops, markdown
+        self.security_pass(graph, files, path)
 
     def analyze_local_folder(self, path: str, g: Graph, ignore: Optional[list[str]] = []) -> None:
         """

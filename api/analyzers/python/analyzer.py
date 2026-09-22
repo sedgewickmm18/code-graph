@@ -1,22 +1,53 @@
 import os
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 import tomllib
-from typing import Optional
-
 from multilspy import SyncLanguageServer
+from tree_sitter import Language, Node
+
+import tree_sitter_python as tspython
 
 from ...entities.entity import Entity
 from ...entities.file import File
 from ..tree_sitter_base import TreeSitterAnalyzer
 from .ts_resolver import TreeSitterPythonResolver
 
-import tree_sitter_python as tspython
-from tree_sitter import Language, Node
+if TYPE_CHECKING:
+    from ...graph import Graph
 
 import logging
 logger = logging.getLogger('code_graph')
+
+# -------------------------------------------------------------------
+# Constants for security entity extraction
+# -------------------------------------------------------------------
+
+# Function names that count as template rendering calls
+_RENDER_CALLS = frozenset({
+    "render_template", "render_template_string",
+    "TemplateResponse", "render",
+})
+
+# Known sanitization function names (T4 — XSS)
+_SANITIZERS = frozenset({
+    "escape", "html_escape", "sanitize", "sanitize_input",
+    "clean", "bleach_clean",
+})
+_SANITIZER_PREFIXES = ("sanitize_", "clean_", "escape_")
+
+# File-system operation names to track (T6 — path traversal)
+_FS_OPS = frozenset({"open", "join", "abspath", "realpath", "expanduser"})
+_FS_OP_ATTRS = frozenset({"os.path.join", "os.path.abspath", "os.path.realpath",
+                           "os.path.expanduser", "pathlib.Path"})
+
+# Request taint sources (T6)
+_TAINT_SOURCES = frozenset({
+    "request.args", "request.form", "request.json",
+    "request.data", "request.values", "request.files",
+    "request.get_json",
+})
 
 
 _RESOLVER_ENV = "CODE_GRAPH_PY_RESOLVER"
@@ -121,17 +152,120 @@ class PythonAnalyzer(TreeSitterAnalyzer):
                     for base_class in base_classes_captures['base_class']:
                         entity.add_symbol("base_class", base_class)
         elif entity.node.type == 'function_definition':
-            captures = self._captures("(call) @reference.call", entity.node)
-            if 'reference.call' in captures:
-                for caller in captures['reference.call']:
+            call_captures = self._captures("(call) @reference.call", entity.node)
+            if 'reference.call' in call_captures:
+                for caller in call_captures['reference.call']:
                     entity.add_symbol("call", caller)
-            captures = self._captures("(typed_parameter type: (_) @parameter)", entity.node)
-            if 'parameter' in captures:
-                for parameter in captures['parameter']:
+            param_captures = self._captures("(typed_parameter type: (_) @parameter)", entity.node)
+            if 'parameter' in param_captures:
+                for parameter in param_captures['parameter']:
                     entity.add_symbol("parameters", parameter)
             return_type = entity.node.child_by_field_name('return_type')
             if return_type:
                 entity.add_symbol("return_type", return_type)
+
+            # T2: decorators live in the decorated_definition parent node
+            # (tree-sitter-python wraps decorated functions in decorated_definition)
+            parent = entity.node.parent
+            if parent is not None and parent.type == "decorated_definition":
+                for child in parent.children:
+                    if child.type == "decorator":
+                        entity.add_symbol("decorator", child)
+
+            # T4: render_template / TemplateResponse calls → Variable nodes
+            # T6: file-system operations → FileSystemOp nodes
+            for call_node in call_captures.get('reference.call', []):
+                func_name = self._call_name(call_node)
+                if func_name in _RENDER_CALLS:
+                    entity.add_symbol("render_call", call_node)
+                if self._is_sanitizer(func_name):
+                    entity.add_symbol("sanitizer_call", call_node)
+                if func_name in _FS_OPS or func_name in _FS_OP_ATTRS:
+                    entity.add_symbol("fs_op", call_node)
+
+    # ------------------------------------------------------------------
+    # Security entity helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _call_name(call_node: Node) -> str:
+        """Return the bare function name from a call node."""
+        func = call_node.child_by_field_name("function")
+        if func is None:
+            return ""
+        if func.type == "attribute":
+            obj = func.child_by_field_name("object")
+            attr = func.child_by_field_name("attribute")
+            if obj is not None and attr is not None:
+                return f"{obj.text.decode('utf-8')}.{attr.text.decode('utf-8')}"
+            if attr is not None:
+                return attr.text.decode("utf-8")
+        return func.text.decode("utf-8")
+
+    @staticmethod
+    def _is_sanitizer(name: str) -> bool:
+        return name in _SANITIZERS or any(name.startswith(p) for p in _SANITIZER_PREFIXES)
+
+    @staticmethod
+    def _node_is_tainted(node: Node) -> bool:
+        """Return True if any argument text looks like a request taint source."""
+        args = node.child_by_field_name("arguments")
+        if args is None:
+            return False
+        raw = args.text.decode("utf-8", errors="replace")
+        return any(src in raw for src in _TAINT_SOURCES)
+
+    def persist_security_entities(
+        self,
+        entity: Entity,
+        file_path: Path,
+        graph: "Graph",  # type: ignore[name-defined]
+        func_id: int,
+    ) -> None:
+        """Persist Decorator, Variable, and FileSystemOp nodes for a function entity.
+
+        Called by SourceAnalyzer after first_pass graph IDs are available.
+        """
+        path_str = str(file_path)
+
+        # T2 — Decorators
+        for dec_node in entity.symbols.get("decorator", []):
+            # The decorator text starts with '@'; strip it and any arguments
+            raw = dec_node.text.decode("utf-8")
+            name_part = raw.lstrip("@").split("(")[0].strip()
+            graph.add_decorator(
+                name=name_part,
+                path=path_str,
+                src_line=dec_node.start_point.row,
+                func_id=func_id,
+            )
+
+        # T4 — Template context variables
+        for call_node in entity.symbols.get("render_call", []):
+            args = call_node.child_by_field_name("arguments")
+            if args is None:
+                continue
+            # Extract keyword arguments as Variable nodes
+            kw_captures = self._captures("(keyword_argument name: (identifier) @kw)", args)
+            for kw_node in kw_captures.get("kw", []):
+                var_name = kw_node.text.decode("utf-8")
+                graph.add_variable(
+                    name=var_name,
+                    path=path_str,
+                    src_line=call_node.start_point.row,
+                )
+
+        # T6 — File-system operations
+        for call_node in entity.symbols.get("fs_op", []):
+            op_name = self._call_name(call_node)
+            tainted = self._node_is_tainted(call_node)
+            graph.add_fs_op(
+                op=op_name,
+                path=path_str,
+                src_line=call_node.start_point.row,
+                func_id=func_id,
+                tainted=tainted,
+            )
 
     def is_dependency(self, file_path: str) -> bool:
         return "venv" in file_path

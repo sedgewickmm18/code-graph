@@ -4,7 +4,7 @@ This project is indexed into a FalkorDB code knowledge graph via the
 `code-graph` MCP server. Use it instead of grepping when you need to
 understand how symbols connect.
 
-## Tool selection
+## Structural tool selection
 
 - Symbol lookup by name: use `code-graph.search_code` (hybrid prefix +
   ranked match) or `code-graph.find_symbol` for an exact name — both give
@@ -18,6 +18,19 @@ understand how symbols connect.
   `code-graph.impact_analysis` with `direction="IN"`.
 - Call chain between two specific symbols: `code-graph.find_path`.
 
+## Security tool selection
+
+- Discover issues: `code-graph.security_scan` (XSS, auth-drift,
+  path-traversal, CVE). Always start here.
+- Investigate XSS: `code-graph.get_template_vars` to see which
+  render_template() kwargs reach HTML elements unsanitized.
+- Investigate auth-drift: `code-graph.get_decorators` to confirm
+  whether @login_required is actually missing.
+- Investigate path-traversal: `code-graph.get_fs_ops` to find tainted
+  file-system calls with exact file/line coordinates.
+- CVE blast-radius: `code-graph.mark_vulnerability(package_name=...)`,
+  then `code-graph.security_scan(rules=["cve"])`.
+
 ## Rules
 
 - Always `search_code`/`find_symbol` first to resolve names to ids.
@@ -25,8 +38,12 @@ understand how symbols connect.
 - Run `impact_analysis(direction="IN", depth=3)` before any non-trivial
   refactor.
 - Pass `branch` when on a feature branch.
+- Security findings include `SourceFile` + `SourceLine` — navigate with
+  `read_file` directly without a separate `find_symbol` call.
+- After fixing, call `index_repo(path=".")` then `security_scan` to
+  verify zero findings remain.
 
 ## First run
 
 If the repo isn't indexed yet, call `index_repo(path=".")` once. After
-that, navigate via the structural tools.
+that, navigate via the structural and security tools.

@@ -2,7 +2,7 @@
 
 # CodeGraph - Knowledge Graph Visualization Tool
 
-**Visualize codebases as knowledge graphs to analyze dependencies, detect bottlenecks, and optimize projects.**
+**Visualize codebases as knowledge graphs to analyze dependencies, detect bottlenecks, optimize projects, and run automated security scans.**
 
 Connect and ask questions: [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/b32KEzMzce)
 
@@ -246,9 +246,14 @@ Then ask Claude things like *"what functions call analyze_sources?"* or *"find t
 
 For agents that speak the [Model Context Protocol](https://modelcontextprotocol.io)
 (Claude Code, Cursor, Cline, …), code-graph ships a stdio MCP server
-that exposes the knowledge graph as 7 first-class tools: `index_repo`,
-`search_code`, `find_symbol`, `get_neighbors`, `get_file_neighbors`,
-`impact_analysis`, and `find_path`.
+that exposes the knowledge graph as **12 first-class tools** across two groups:
+
+**Structural tools** (navigate and understand code structure):
+`index_repo`, `search_code`, `find_symbol`, `get_neighbors`, `get_file_neighbors`,
+`impact_analysis`, `find_path`
+
+**Security tools** (discover and fix vulnerabilities):
+`security_scan`, `get_template_vars`, `get_decorators`, `get_fs_ops`, `mark_vulnerability`
 
 Quickstart — Claude Code:
 
@@ -281,6 +286,21 @@ docker compose --profile mcp run --rm -i code-graph-mcp   # attach via stdio
 The MCP server auto-bootstraps FalkorDB if it's missing on localhost
 (via `cgraph ensure-db`). When `CODE_GRAPH_AUTO_INDEX=true` is set,
 the current working directory is indexed automatically on start.
+
+#### Security tools quick reference
+
+| Tool | Inputs | Use case |
+|---|---|---|
+| `security_scan` | `project`, `rules?`, `package_name?` | Discover XSS / auth-drift / path-traversal / CVE findings |
+| `get_template_vars` | `project`, `template_file?` | Enumerate unsanitized template variable flows (XSS) |
+| `get_decorators` | `symbol_id`, `project` | Check auth decorators on a route handler (auth-drift) |
+| `get_fs_ops` | `project`, `tainted_only?` | Find tainted file-system calls with caller + line (path-traversal) |
+| `mark_vulnerability` | `project`, `package_name`, `status?` | Tag/untag a package after a CVE alert (CVE blast-radius) |
+
+All security findings include `SourceFile` and `SourceLine` so the agent can call
+`read_file` directly without a separate `find_symbol` round-trip. Every tainted
+file-system op and CVE caller result includes a `caller_symbol_id` / `CallerSymbolId`
+ready for `impact_analysis`.
 
 **Transport:** Phase 1 is stdio only. HTTP/SSE is deferred.
 
@@ -352,15 +372,119 @@ curl -X POST http://127.0.0.1:5000/api/analyze_repo \
 curl http://127.0.0.1:5000/api/list_repos
 ```
 
-## Supported Languages
+## Supported Languages & File Types
 
 `api/analyzers/source_analyzer.py` currently enables these analyzers:
 
-- Python (`.py`)
-- Java (`.java`)
-- C# (`.cs`)
+| Extension(s) | Analyzer | Notes |
+|---|---|---|
+| `.py` | Python | Classes, functions, decorators, template vars, FS ops |
+| `.java` | Java | Classes, methods, inheritance |
+| `.cs` | C# | Classes, methods |
+| `.js` | JavaScript | Functions, classes, methods |
+| `.kt`, `.kts` | Kotlin | Classes, functions |
+| `.html`, `.jinja2`, `.j2` | HTML/Jinja2 | `HtmlElement`, `HtmlForm`, `{{ var }}` refs |
+| `.md` | Markdown | `MarkdownSection`, `Requirement`, route detection |
 
-A C analyzer exists in the source tree, but it is commented out and is not currently registered.
+A C analyzer exists in the source tree but is commented out and not currently registered.
+
+## Security Analysis
+
+When a repository is indexed, code-graph automatically extracts **security-relevant entities** across Python, HTML/Jinja2, and Markdown files and stores them as first-class graph nodes alongside the regular code structure.
+
+### New node labels
+
+| Label | What it represents |
+|---|---|
+| `HtmlElement` | A DOM element in a `.html` / `.jinja2` template |
+| `HtmlForm` | A `<form>` element |
+| `Variable` | A Python variable injected into a template context |
+| `Decorator` | A decorator applied to a Python function or route handler |
+| `Package` | A pip dependency declared in `requirements.txt` / `pyproject.toml` |
+| `ExternalFunction` | A function inside a venv `site-packages` path |
+| `MarkdownSection` | An H2/H3 heading in a `.md` documentation file |
+| `Requirement` | A bullet-point security requirement in a doc |
+| `FileSystemOp` | A call to `open()`, `os.path.join()`, `pathlib.Path()`, etc. |
+
+### New relationship edges
+
+| Edge | From → To | Meaning |
+|---|---|---|
+| `INJECTED_INTO` | `Variable` → `HtmlElement` | Template variable reaches this element |
+| `PROCESSED_BY` | `Variable` → `Function` | Variable passes through a sanitizer first |
+| `HAS_DECORATOR` | `Function` → `Decorator` | Function has this decorator applied |
+| `BELONGS_TO` | `ExternalFunction` → `Package` | Function lives in this package |
+| `DEFINES_REQUIREMENT` | `MarkdownSection` → `Requirement` | Doc section declares this requirement |
+| `DEFINES_ROUTE` | `MarkdownSection` → `Route` | Doc section documents this API route |
+| `HAS_FS_OP` | `Function` → `FileSystemOp` | Function contains this file-system call |
+
+### Security scan endpoint
+
+Run the four built-in security rules against any indexed repo:
+
+```bash
+curl -X POST http://localhost:5000/api/security_scan \
+  -H "Content-Type: application/json" \
+  -d '{"repo": "my-flask-app", "rules": ["xss", "auth_drift", "path_traversal"]}'
+```
+
+Available rules:
+
+| Rule | What it detects |
+|---|---|
+| `xss` | Template variables that reach an `HtmlElement` without passing through a sanitizer (`html.escape`, `markupsafe.escape`, `sanitize_*`, …) |
+| `auth_drift` | API routes documented in Markdown as requiring authentication but whose Python handler lacks a `@login_required` decorator |
+| `path_traversal` | `open()` / `os.path.join()` calls where the argument originates from `request.args`, `request.form`, or `request.json` |
+| `cve` | Functions in your codebase that directly call into a named pip package (supply `"package_name"` in the request to identify blast radius after a CVE alert) |
+
+Response format:
+
+```json
+{
+  "repo": "my-flask-app",
+  "findings": [
+    {
+      "rule": "xss",
+      "name": "XSS: Unsanitized Template Variables",
+      "severity": "high",
+      "results": [
+        {"UnsafeVariable": "user_comment", "TargetElement": "div", "SourceFile": "app/views.py", "SourceLine": 42}
+      ]
+    }
+  ]
+}
+```
+
+You can also run the queries directly against FalkorDB. The graph name for a repo `my-app` on branch `main` is `code:my-app:main`.
+
+```cypher
+-- XSS: find template variables not passed through a sanitizer
+MATCH (v:Variable)-[:INJECTED_INTO]->(e:HtmlElement)
+WHERE NOT EXISTS {
+    MATCH (v)-[:PROCESSED_BY]->(:Function)
+}
+RETURN v.name AS UnsafeVariable, e.name AS TargetElement,
+       v.path AS SourceFile, v.src_line AS SourceLine
+
+-- Auth-drift: routes documented in Markdown but missing @login_required
+MATCH (m:MarkdownSection)-[:DEFINES_ROUTE]->(r:Route)
+OPTIONAL MATCH (f:Function {route: r.path})
+WHERE f IS NULL OR NOT (f)-[:HAS_DECORATOR]->(:Decorator {name: 'login_required'})
+RETURN m.title AS DocumentedSection, r.path AS UnsecuredRoute
+
+-- Path-traversal: tainted file-system operations
+MATCH (fs:FileSystemOp)
+WHERE fs.tainted = true
+OPTIONAL MATCH (caller:Function)-[:HAS_FS_OP]->(fs)
+RETURN fs.op AS Operation, fs.src_file, fs.src_line, caller.name AS CallerFunction
+
+-- CVE blast-radius: who calls into a vulnerable package?
+MATCH (f:Function)-[:CALLS]->(ef:ExternalFunction)-[:BELONGS_TO]->(p:Package {name: 'requests'})
+RETURN f.name AS CallerFunction, f.path AS CallerFile,
+       ef.name AS VulnerableFunction, ef.module AS Module
+```
+
+See [`docs/SECURITY_ENTITY_TRACKING.md`](docs/SECURITY_ENTITY_TRACKING.md) for the full reference, including all node/edge schemas and the architectural overview.
 
 ## API Endpoints
 
@@ -376,6 +500,7 @@ A C analyzer exists in the source tree, but it is commented out and is not curre
 | POST | `/api/find_paths` | Find paths between two graph nodes |
 | POST | `/api/chat` | Ask questions over the code graph via GraphRAG |
 | POST | `/api/list_commits` | List commits from the repository's git graph |
+| POST | `/api/security_scan` | Run security rules (XSS, auth-drift, path-traversal, CVE) against an indexed repo |
 
 ### Mutating endpoints
 

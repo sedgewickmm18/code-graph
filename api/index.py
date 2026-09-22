@@ -17,6 +17,7 @@ from api.graph import Graph, AsyncGraphQuery, async_get_repos
 from api.info import async_get_repo_info
 from api.llm import ask
 from api.project import Project, detect_branch
+from api.security_queries import run_security_scan
 
 
 # Load environment variables from .env file
@@ -94,6 +95,12 @@ class SwitchCommitRequest(BaseModel):
     repo: str
     commit: str
     branch: Optional[str] = None
+
+class SecurityScanRequest(BaseModel):
+    repo: str
+    branch: Optional[str] = None
+    rules: Optional[list[str]] = None   # None = run all rules
+    package_name: Optional[str] = None  # required for "cve" rule
 
 # ---------------------------------------------------------------------------
 # Application
@@ -307,6 +314,22 @@ async def list_commits(data: RepoRequest, _=Depends(public_or_auth)):
     finally:
         await git_graph.close()
     return {"status": "success", "commits": commits}
+
+@app.post('/api/security_scan')
+async def security_scan(data: SecurityScanRequest, _=Depends(public_or_auth)):
+    """Run security Cypher queries against an indexed repository.
+
+    Returns structured findings for each active rule.
+    Rules: ``xss``, ``auth_drift``, ``path_traversal``, ``cve`` (needs package_name).
+    """
+    g = Graph(data.repo, branch=data.branch)
+    loop = asyncio.get_running_loop()
+    findings = await loop.run_in_executor(
+        None,
+        lambda: run_security_scan(g, rules=data.rules, package_name=data.package_name),
+    )
+    return {"repo": data.repo, "findings": findings}
+
 
 # ---------------------------------------------------------------------------
 # SPA static file serving (must come after API routes)

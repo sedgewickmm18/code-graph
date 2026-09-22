@@ -797,6 +797,228 @@ class Graph():
         return unreachables
 
 
+    # ------------------------------------------------------------------
+    # Security entity helpers (T7)
+    # ------------------------------------------------------------------
+
+    def add_decorator(self, name: str, path: str, src_line: int, func_id: int) -> int:
+        """Create a Decorator node and a HAS_DECORATOR edge from func_id.
+
+        Args:
+            name: Decorator name (e.g. ``login_required``).
+            path: Source file path.
+            src_line: Line number of the decorator.
+            func_id: Graph node ID of the decorated function.
+
+        Returns:
+            The graph node ID of the Decorator node.
+        """
+        q = """MERGE (d:Decorator {name: $name, path: $path, src_line: $src_line})
+               RETURN d"""
+        params = {"name": name, "path": path, "src_line": src_line}
+        node = self._query(q, params).result_set[0][0]
+        dec_id = node.id
+        self.connect_entities("HAS_DECORATOR", func_id, dec_id)
+        return dec_id
+
+    def add_package(self, name: str, version: str = "") -> int:
+        """Create or retrieve a Package node.
+
+        Args:
+            name: Package name (e.g. ``flask``).
+            version: Version string (may be empty).
+
+        Returns:
+            The graph node ID of the Package node.
+        """
+        q = """MERGE (p:Package {name: $name})
+               SET p.version = $version
+               RETURN p"""
+        params = {"name": name, "version": version}
+        node = self._query(q, params).result_set[0][0]
+        return node.id
+
+    def add_external_function(
+        self,
+        name: str,
+        module: str,
+        path: str,
+        src_line: int,
+        package_id: int,
+    ) -> int:
+        """Create an ExternalFunction node and BELONGS_TO edge to its Package.
+
+        Args:
+            name: Function name.
+            module: Dotted module path (e.g. ``flask.helpers``).
+            path: Absolute path inside the venv.
+            src_line: Line number inside the venv source.
+            package_id: Graph node ID of the owning Package.
+
+        Returns:
+            The graph node ID of the ExternalFunction node.
+        """
+        q = """MERGE (ef:ExternalFunction {name: $name, module: $module, path: $path})
+               SET ef.src_line = $src_line
+               RETURN ef"""
+        params = {"name": name, "module": module, "path": path, "src_line": src_line}
+        node = self._query(q, params).result_set[0][0]
+        ef_id = node.id
+        self.connect_entities("BELONGS_TO", ef_id, package_id)
+        return ef_id
+
+    def add_variable(self, name: str, path: str, src_line: int) -> int:
+        """Create or retrieve a Variable node.
+
+        Args:
+            name: Variable name as it appears in the template context.
+            path: Source file path where the variable originates.
+            src_line: Line number of the render_template / TemplateResponse call.
+
+        Returns:
+            The graph node ID of the Variable node.
+        """
+        q = """MERGE (v:Variable {name: $name, path: $path})
+               SET v.src_line = $src_line
+               RETURN v"""
+        params = {"name": name, "path": path, "src_line": src_line}
+        node = self._query(q, params).result_set[0][0]
+        return node.id
+
+    def add_html_element(
+        self,
+        tag: str,
+        label: str,
+        path: str,
+        src_start: int,
+        src_end: int,
+        file_id: int,
+        attr_id: str = "",
+    ) -> int:
+        """Create an HtmlElement (or HtmlForm) node and DEFINES edge from File.
+
+        Args:
+            tag: HTML tag name (e.g. ``div``, ``form``).
+            label: ``HtmlElement`` or ``HtmlForm``.
+            path: Template file path.
+            src_start: Start line.
+            src_end: End line.
+            file_id: Graph node ID of the parent File node.
+            attr_id: Optional ``id`` attribute value for disambiguation.
+
+        Returns:
+            The graph node ID of the new node.
+        """
+        name = f"{tag}#{attr_id}" if attr_id else tag
+        q = f"""MERGE (e:{label} {{name: $name, path: $path, src_start: $src_start, src_end: $src_end}})
+                RETURN e"""
+        params = {"name": name, "path": path, "src_start": src_start, "src_end": src_end}
+        node = self._query(q, params).result_set[0][0]
+        elem_id = node.id
+        self.connect_entities("DEFINES", file_id, elem_id)
+        return elem_id
+
+    def add_fs_op(
+        self,
+        op: str,
+        path: str,
+        src_line: int,
+        func_id: int,
+        tainted: bool = False,
+    ) -> int:
+        """Create a FileSystemOp node and HAS_FS_OP edge from its enclosing function.
+
+        Args:
+            op: Operation name (``open``, ``os.path.join``, etc.).
+            path: Source file path.
+            src_line: Line number of the call.
+            func_id: Graph node ID of the enclosing Function node.
+            tainted: Whether the argument is user-controlled (request input).
+
+        Returns:
+            The graph node ID of the FileSystemOp node.
+        """
+        q = """MERGE (fs:FileSystemOp {op: $op, path: $path, src_line: $src_line})
+               SET fs.tainted = $tainted
+               RETURN fs"""
+        params = {"op": op, "path": path, "src_line": src_line, "tainted": tainted}
+        node = self._query(q, params).result_set[0][0]
+        fs_id = node.id
+        self.connect_entities("HAS_FS_OP", func_id, fs_id)
+        return fs_id
+
+    def add_markdown_section(
+        self,
+        title: str,
+        level: int,
+        path: str,
+        src_line: int,
+        route_method: Optional[str] = None,
+        route_path: Optional[str] = None,
+    ) -> int:
+        """Create a MarkdownSection node (and optional Route node + DEFINES_ROUTE edge).
+
+        Args:
+            title: Heading text.
+            level: Heading level (2 or 3).
+            path: Markdown file path.
+            src_line: Line number of the heading.
+            route_method: HTTP method if heading names a route.
+            route_path: URL path if heading names a route.
+
+        Returns:
+            The graph node ID of the MarkdownSection node.
+        """
+        q = """MERGE (m:MarkdownSection {title: $title, path: $path, src_line: $src_line})
+               SET m.level = $level
+               RETURN m"""
+        params = {"title": title, "path": path, "src_line": src_line, "level": level}
+        node = self._query(q, params).result_set[0][0]
+        sec_id = node.id
+
+        if route_method and route_path:
+            rq = """MERGE (r:Route {method: $method, path: $rpath})
+                    RETURN r"""
+            rnode = self._query(rq, {"method": route_method, "rpath": route_path}).result_set[0][0]
+            self.connect_entities("DEFINES_ROUTE", sec_id, rnode.id)
+
+        return sec_id
+
+    def add_requirement(
+        self,
+        text: str,
+        path: str,
+        src_line: int,
+        section_id: int,
+    ) -> int:
+        """Create a Requirement node and DEFINES_REQUIREMENT edge from its MarkdownSection.
+
+        Args:
+            text: Requirement description.
+            path: Markdown file path.
+            src_line: Line number of the bullet.
+            section_id: Graph node ID of the parent MarkdownSection.
+
+        Returns:
+            The graph node ID of the Requirement node.
+        """
+        q = """MERGE (req:Requirement {text: $text, path: $path, src_line: $src_line})
+               RETURN req"""
+        params = {"text": text, "path": path, "src_line": src_line}
+        node = self._query(q, params).result_set[0][0]
+        req_id = node.id
+        self.connect_entities("DEFINES_REQUIREMENT", section_id, req_id)
+        return req_id
+
+    def link_variable_to_element(self, var_id: int, elem_id: int) -> None:
+        """Add an INJECTED_INTO edge from Variable to HtmlElement."""
+        self.connect_entities("INJECTED_INTO", var_id, elem_id)
+
+    def link_variable_sanitized_by(self, var_id: int, func_id: int) -> None:
+        """Add a PROCESSED_BY edge from Variable to a sanitization Function."""
+        self.connect_entities("PROCESSED_BY", var_id, func_id)
+
+
 # ---------------------------------------------------------------------------
 # Async helpers and read-only async graph wrapper
 # ---------------------------------------------------------------------------

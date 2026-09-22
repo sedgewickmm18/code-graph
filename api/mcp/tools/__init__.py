@@ -12,3 +12,4 @@ Each submodule registers tools against the shared MCPServer app exposed by
 # per call for no signal, so we expose only the deterministic structural tools.
 # GraphRAG ask remains available on the HTTP /api/chat path.
 from . import structural  # noqa: F401  (registers tools on import)
+from . import security  # noqa: F401  (registers security tools on import)
