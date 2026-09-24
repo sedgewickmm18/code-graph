@@ -100,6 +100,9 @@ cp .env.template .env
 | `CODE_GRAPH_PUBLIC` | Set `1` to skip auth on read-only endpoints | No | `0` |
 | `ALLOWED_ANALYSIS_DIR` | Root path allowed for `/api/analyze_folder` | No | repository root |
 | `MODEL_NAME` | LiteLLM model used by `/api/chat` | No | `gemini/gemini-flash-lite-latest` |
+| `CGRAPH_LLM_BASE_URL` | OpenAI-compatible endpoint for `cgraph gen-spec` | No | `http://localhost:8080/v1` |
+| `CGRAPH_LLM_MODEL` | Model name for `cgraph gen-spec` | No | `local` |
+| `CGRAPH_LLM_API_KEY` | API key for `cgraph gen-spec` endpoint | No | `local` |
 | `HOST` | Optional Uvicorn bind host for `start.sh`/`make run-*` | No | `0.0.0.0` or `127.0.0.1` depending on command |
 | `PORT` | Optional Uvicorn bind port for `start.sh`/`make run-*` | No | `5000` |
 
@@ -231,6 +234,27 @@ cgraph info
 ```
 
 The `--repo` flag defaults to the current directory name. Run `cgraph --help` for full details.
+
+### Generate specs from code
+
+`cgraph gen-spec` queries the knowledge graph for a named capability (class, file, or API route), assembles a structured context packet from docstrings, call edges, auth decorators and filesystem operations, then calls a configurable OpenAI-compatible LLM to draft an OpenSpec `spec.md`.
+
+```bash
+# Basic usage — prints the draft spec to stdout
+cgraph gen-spec SourceAnalyzer
+
+# Write the spec to a file
+cgraph gen-spec SourceAnalyzer -o openspec/specs/source-analyzer/spec.md
+
+# Inspect the assembled context without calling the LLM
+cgraph gen-spec SourceAnalyzer --dry-run
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CGRAPH_LLM_BASE_URL` | `http://localhost:8080/v1` | OpenAI-compatible endpoint for `cgraph gen-spec`; default assumes a local llama.cpp / Ollama / LM Studio server |
+| `CGRAPH_LLM_MODEL` | `local` | Model name passed to the endpoint; use `provider/model` syntax for LiteLLM-routed endpoints |
+| `CGRAPH_LLM_API_KEY` | `local` | API key for the endpoint; most local servers accept any non-empty string |
 
 ### Claude Code Skill
 
@@ -385,8 +409,32 @@ curl http://127.0.0.1:5000/api/list_repos
 | `.kt`, `.kts` | Kotlin | Classes, functions |
 | `.html`, `.jinja2`, `.j2` | HTML/Jinja2 | `HtmlElement`, `HtmlForm`, `{{ var }}` refs |
 | `.md` | Markdown | `MarkdownSection`, `Requirement`, route detection |
+| `openspec/` tree | OpenSpec | `OpenSpecCapability`, `OpenSpecRequirement`, `OpenSpecScenario`, `OpenSpecChange`, `OpenSpecTask`, `OpenSpecDeltaSpec` |
 
 A C analyzer exists in the source tree but is commented out and not currently registered.
+
+### OpenSpec support
+
+Repositories containing an `openspec/` directory (with an `openspec/specs/`
+subdirectory) are automatically recognized and indexed by the
+`OpenSpecAnalyzer`. The analyzer extracts the full structured specification
+tree into the graph:
+
+| Graph node | Source | Description |
+|---|---|---|
+| `OpenSpecCapability` | `openspec/specs/<name>/spec.md` | A documented capability and its purpose |
+| `OpenSpecRequirement` `:Searchable` | `### Requirement:` headings | Verifiable behavior contract |
+| `OpenSpecScenario` `:Searchable` | `#### Scenario:` headings | GIVEN/WHEN/THEN test scenario |
+| `OpenSpecChange` | `openspec/changes/<name>/` | A proposed or in-flight change |
+| `OpenSpecTask` | `openspec/changes/<name>/tasks.md` | A checkbox task item |
+| `OpenSpecDeltaSpec` | `openspec/changes/<name>/specs/<cap>/spec.md` | ADDED / MODIFIED / REMOVED / RENAMED delta |
+
+`OpenSpecRequirement` and `OpenSpecScenario` carry the `:Searchable`
+multi-label so they appear in auto-complete and GraphRAG chat without any
+extra configuration.
+
+See [`docs/OPENSPEC_SCHEMA.md`](docs/OPENSPEC_SCHEMA.md) for the full node
+property and relationship reference.
 
 ## Security Analysis
 

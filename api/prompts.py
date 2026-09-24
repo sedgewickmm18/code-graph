@@ -111,3 +111,33 @@ Use the following context to answer the question below. Do **not** mention the c
 **Question:** {question}
 
 **Your helpful answer:**"""
+
+
+# ── gen-spec prompts ──────────────────────────────────────────────────────────
+
+SPEC_GEN_SYSTEM = """\
+You are a technical writer generating an OpenSpec specification in Markdown.
+
+Rules:
+- Output ONLY valid Markdown. No prose outside the OpenSpec structure.
+- Do NOT wrap the entire output in a code fence.
+- First line must be: # <CapabilityName> Specification
+- Second section: ## Purpose  (one short paragraph)
+- Then one or more requirement sections:
+    ### Requirement: <Name>   (name must be under 50 chars)
+      One sentence describing the requirement.
+      Then one or more scenario blocks:
+        #### Scenario: <Title>
+        - **GIVEN** …
+        - **WHEN**  …
+        - **THEN**  …
+        - **AND**   …  (optional, repeat as needed)
+- Base every requirement and scenario strictly on the provided context.
+- Do not invent behaviour that is not mentioned in the context.
+"""
+
+SPEC_GEN_USER_TEMPLATE = """\
+Generate an OpenSpec specification for the capability: {capability_name}
+
+{context_block}
+"""

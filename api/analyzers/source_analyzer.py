@@ -14,6 +14,7 @@ from .java.analyzer import JavaAnalyzer
 from .javascript.analyzer import JavaScriptAnalyzer
 from .kotlin.analyzer import KotlinAnalyzer
 from .markdown.analyzer import MarkdownAnalyzer
+from .openspec.analyzer import OpenSpecAnalyzer
 from .python.analyzer import PythonAnalyzer
 
 from multilspy import SyncLanguageServer
@@ -28,6 +29,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(filename)s - %(asctime)s - %(
 # Singleton instances
 _html_analyzer = HtmlAnalyzer()
 _markdown_analyzer = MarkdownAnalyzer()
+_openspec_analyzer = OpenSpecAnalyzer()
 
 # List of available analyzers (AbstractAnalyzer subclasses)
 analyzers: dict[str, AbstractAnalyzer] = {
@@ -105,6 +107,10 @@ class SourceAnalyzer():
         for file_path in files:
             # --- Markdown (T5) ---
             if file_path.suffix == ".md":
+                # Skip files under openspec/ — handled exclusively by OpenSpecAnalyzer
+                fp_posix = str(file_path).replace("\\", "/")
+                if "/openspec/" in fp_posix or fp_posix.endswith("/openspec"):
+                    continue
                 try:
                     _markdown_analyzer.analyze_file(file_path, graph)
                 except Exception:
@@ -431,6 +437,18 @@ class SourceAnalyzer():
         if import_pairs:
             graph.connect_entities_batch("IMPORTS", import_pairs)
 
+    @staticmethod
+    def _find_openspec_root(path: Path) -> Optional[Path]:
+        """Return the ``openspec/`` directory under ``path`` if it exists.
+
+        Looks for ``<path>/openspec/specs/`` as the canonical indicator.  Returns
+        ``None`` when no OpenSpec tree is found.
+        """
+        candidate = path / "openspec"
+        if (candidate / "specs").is_dir():
+            return candidate
+        return None
+
     def analyze_files(self, files: list[Path], path: Path, graph: Graph) -> None:
         self.first_pass(path, files, [], graph)
         self.link_imports(graph, path)
@@ -473,6 +491,18 @@ class SourceAnalyzer():
 
         # Security entity pass: decorators, variables, FS ops, markdown
         self.security_pass(graph, files, path)
+
+        # OpenSpec pass: detect openspec/ root and analyze if present
+        openspec_root = self._find_openspec_root(path)
+        if openspec_root is not None:
+            try:
+                _openspec_analyzer.analyze_directory(openspec_root, graph)
+            except Exception:
+                logging.warning(
+                    "analyze_sources: OpenSpec analysis failed for %s",
+                    openspec_root,
+                    exc_info=True,
+                )
 
     def analyze_local_folder(self, path: str, g: Graph, ignore: Optional[list[str]] = []) -> None:
         """

@@ -467,5 +467,95 @@ def init_agent(
     _json_out({"status": "ok", "written": written, "force": force})
 
 
+# ── gen-spec ───────────────────────────────────────────────────────────
+
+
+@app.command("gen-spec")
+def gen_spec(
+    capability: str = typer.Argument(..., help="Class name, file basename, or route path fragment"),
+    repo: Optional[str] = typer.Option(
+        None, "--repo", help="Repository name (defaults to CWD name)"
+    ),
+    branch: Optional[str] = typer.Option(
+        None, "--branch", help="Branch (auto-detected from CWD; '_default' for non-git paths)"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Path to write spec.md; if omitted, print to stdout"
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--llm-url", help="OpenAI-compatible endpoint base URL (overrides CGRAPH_LLM_BASE_URL)"
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--llm-model", help="Model name (overrides CGRAPH_LLM_MODEL)"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print assembled context packet as JSON without calling the LLM"
+    ),
+) -> None:
+    """Generate an OpenSpec spec.md draft from the code graph using an LLM."""
+    import os as _os
+
+    from .graph import Graph
+    from .project import detect_branch
+    from .spec_context import build_spec_context
+    from .spec_llm import generate_spec
+
+    name = _default_repo(repo)
+    if branch is None:
+        branch = detect_branch(Path.cwd())
+
+    _stderr(f"Building context for '{capability}' in repo '{name}' (branch={branch})…")
+
+    try:
+        g = Graph(name, branch=branch)
+        context = build_spec_context(g, capability)
+    except ValueError as e:
+        _json_error(str(e))
+    except Exception as e:
+        _json_error(f"Failed to build context: {e}")
+
+    if dry_run:
+        _json_out({"status": "dry-run", "capability": capability, "context": context})
+        return
+
+    resolved_base_url = base_url or _os.getenv("CGRAPH_LLM_BASE_URL", "http://localhost:8080/v1")
+    resolved_model = model or _os.getenv("CGRAPH_LLM_MODEL", "local")
+
+    _stderr(f"Calling LLM at {resolved_base_url} (model={resolved_model})…")
+
+    try:
+        spec_content = generate_spec(
+            context=context,
+            capability_name=capability,
+            base_url=base_url or "",
+            model=model or "",
+        )
+    except RuntimeError as e:
+        _json_error(str(e))
+    except Exception as e:
+        _json_error(f"LLM call failed: {e}")
+
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(spec_content, encoding="utf-8")
+        _stderr(f"Wrote spec to {output}")
+        _json_out({
+            "status": "ok",
+            "capability": capability,
+            "output_path": str(output),
+            "model": resolved_model,
+            "base_url": resolved_base_url,
+        })
+    else:
+        print(spec_content)
+        _json_out({
+            "status": "ok",
+            "capability": capability,
+            "output_path": "stdout",
+            "model": resolved_model,
+            "base_url": resolved_base_url,
+        })
+
+
 if __name__ == "__main__":
     app()

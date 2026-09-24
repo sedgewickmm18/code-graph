@@ -1018,6 +1018,244 @@ class Graph():
         """Add a PROCESSED_BY edge from Variable to a sanitization Function."""
         self.connect_entities("PROCESSED_BY", var_id, func_id)
 
+    # -----------------------------------------------------------------------
+    # OpenSpec helpers
+    # -----------------------------------------------------------------------
+
+    def add_openspec_capability(
+        self,
+        name: str,
+        path: str,
+        purpose: str,
+        src_file: str,
+    ) -> int:
+        """Create or merge an OpenSpecCapability node.
+
+        Args:
+            name:     Capability directory name.
+            path:     Absolute path to the capability directory.
+            purpose:  Text from the '## Purpose' section of spec.md.
+            src_file: Absolute path to the spec.md file.
+
+        Returns:
+            Graph node ID of the OpenSpecCapability node.
+        """
+        q = """MERGE (c:OpenSpecCapability {name: $name, src_file: $src_file})
+               SET c.path = $path, c.purpose = $purpose
+               RETURN c"""
+        params = {"name": name, "path": path, "purpose": purpose, "src_file": src_file}
+        node = self._query(q, params).result_set[0][0]
+        return node.id
+
+    def add_openspec_requirement(
+        self,
+        name: str,
+        text: str,
+        src_file: str,
+        src_line: int,
+        capability_id: int,
+    ) -> int:
+        """Create or merge an OpenSpecRequirement node and link to its capability.
+
+        Args:
+            name:          Requirement name (text after 'Requirement:').
+            text:          Full body text of the requirement.
+            src_file:      Absolute path to the containing spec file.
+            src_line:      Line number of the heading.
+            capability_id: Graph node ID of the parent OpenSpecCapability.
+
+        Returns:
+            Graph node ID of the OpenSpecRequirement node.
+        """
+        q = """MERGE (r:OpenSpecRequirement:Searchable {name: $name, src_file: $src_file})
+               SET r.text = $text, r.src_line = $src_line
+               RETURN r"""
+        params = {"name": name, "text": text, "src_file": src_file, "src_line": src_line}
+        node = self._query(q, params).result_set[0][0]
+        req_id = node.id
+        self.connect_entities("DEFINES_REQUIREMENT", capability_id, req_id)
+        return req_id
+
+    def add_openspec_scenario(
+        self,
+        name: str,
+        given: str,
+        when_clause: str,
+        then_clause: str,
+        src_file: str,
+        src_line: int,
+        req_id: int,
+    ) -> int:
+        """Create or merge an OpenSpecScenario node and link to its requirement.
+
+        Args:
+            name:        Scenario name (text after 'Scenario:').
+            given:       Concatenated GIVEN/AND bullets (may be empty).
+            when_clause: Concatenated WHEN/AND bullets.
+            then_clause: Concatenated THEN/AND bullets.
+            src_file:    Absolute path to the containing spec file.
+            src_line:    Line number of the '#### Scenario:' heading.
+            req_id:      Graph node ID of the parent OpenSpecRequirement.
+
+        Returns:
+            Graph node ID of the OpenSpecScenario node.
+        """
+        q = """MERGE (s:OpenSpecScenario:Searchable {name: $name, src_file: $src_file, src_line: $src_line})
+               SET s.given = $given, s.when_clause = $when_clause, s.then_clause = $then_clause
+               RETURN s"""
+        params = {
+            "name": name,
+            "given": given,
+            "when_clause": when_clause,
+            "then_clause": then_clause,
+            "src_file": src_file,
+            "src_line": src_line,
+        }
+        node = self._query(q, params).result_set[0][0]
+        scen_id = node.id
+        self.connect_entities("HAS_SCENARIO", req_id, scen_id)
+        return scen_id
+
+    def add_openspec_change(
+        self,
+        name: str,
+        path: str,
+        created: str,
+        schema: str,
+        skip_specs: bool,
+    ) -> int:
+        """Create or merge an OpenSpecChange node.
+
+        Args:
+            name:       Change directory name.
+            path:       Absolute path to the change directory.
+            created:    ISO date string from .openspec.yaml.
+            schema:     Schema name from .openspec.yaml.
+            skip_specs: Whether skip_specs is set in .openspec.yaml.
+
+        Returns:
+            Graph node ID of the OpenSpecChange node.
+        """
+        q = """MERGE (c:OpenSpecChange {name: $name, path: $path})
+               SET c.created = $created, c.schema = $schema, c.skip_specs = $skip_specs
+               RETURN c"""
+        params = {
+            "name": name,
+            "path": path,
+            "created": created,
+            "schema": schema,
+            "skip_specs": skip_specs,
+        }
+        node = self._query(q, params).result_set[0][0]
+        return node.id
+
+    def add_openspec_task(
+        self,
+        text: str,
+        checked: bool,
+        group: str,
+        task_num: str,
+        src_file: str,
+        src_line: int,
+        change_id: int,
+    ) -> int:
+        """Create or merge an OpenSpecTask node and link to its change.
+
+        Args:
+            text:      Task description text.
+            checked:   True if checkbox is marked.
+            group:     H2 group heading the task belongs to.
+            task_num:  Numeric prefix (e.g. '1.1') if present, else empty string.
+            src_file:  Absolute path to the tasks.md file.
+            src_line:  Line number of the checkbox item.
+            change_id: Graph node ID of the parent OpenSpecChange.
+
+        Returns:
+            Graph node ID of the OpenSpecTask node.
+        """
+        q = """MERGE (t:OpenSpecTask {src_file: $src_file, src_line: $src_line})
+               SET t.text = $text, t.checked = $checked, t.group = $group, t.task_num = $task_num
+               RETURN t"""
+        params = {
+            "text": text,
+            "checked": checked,
+            "group": group,
+            "task_num": task_num,
+            "src_file": src_file,
+            "src_line": src_line,
+        }
+        node = self._query(q, params).result_set[0][0]
+        task_id = node.id
+        self.connect_entities("CHANGE_HAS_TASK", change_id, task_id)
+        return task_id
+
+    def add_openspec_delta(
+        self,
+        capability_name: str,
+        change_name: str,
+        src_file: str,
+        delta_type: str,
+        requirement_name: str,
+        req_text: str,
+        change_id: int,
+        capability_id: Optional[int] = None,
+    ) -> int:
+        """Create or merge an OpenSpecDeltaSpec node and link change->capability.
+
+        For each requirement referenced in the delta, the method also creates
+        an OpenSpecRequirement node (if it does not yet exist) and wires the
+        appropriate CHANGE_ADDS_REQUIREMENT / CHANGE_MODIFIES_REQUIREMENT /
+        CHANGE_REMOVES_REQUIREMENT edge.
+
+        Args:
+            capability_name:  Capability directory name.
+            change_name:      Parent change directory name.
+            src_file:         Absolute path to the delta spec file.
+            delta_type:       One of ADDED, MODIFIED, REMOVED, RENAMED.
+            requirement_name: Requirement name from the delta heading.
+            req_text:         Requirement body text.
+            change_id:        Graph node ID of the parent OpenSpecChange.
+            capability_id:    Graph node ID of the capability, if already known.
+
+        Returns:
+            Graph node ID of the OpenSpecDeltaSpec node.
+        """
+        # Ensure the DeltaSpec node exists
+        q = """MERGE (d:OpenSpecDeltaSpec {capability: $capability, change_name: $change_name,
+                                           src_file: $src_file, delta_type: $delta_type})
+               RETURN d"""
+        params = {
+            "capability": capability_name,
+            "change_name": change_name,
+            "src_file": src_file,
+            "delta_type": delta_type,
+        }
+        node = self._query(q, params).result_set[0][0]
+        delta_id = node.id
+
+        # Wire change -> capability if we have a capability node
+        if capability_id is not None:
+            self.connect_entities("CHANGE_TARGETS_CAPABILITY", change_id, capability_id)
+
+        # Wire requirement edge based on delta_type
+        req_q = """MERGE (r:OpenSpecRequirement:Searchable {name: $name, src_file: $src_file})
+                   SET r.text = $text
+                   RETURN r"""
+        req_params = {"name": requirement_name, "src_file": src_file, "text": req_text}
+        req_node = self._query(req_q, req_params).result_set[0][0]
+        req_id = req_node.id
+
+        rel_map = {
+            "ADDED": "CHANGE_ADDS_REQUIREMENT",
+            "MODIFIED": "CHANGE_MODIFIES_REQUIREMENT",
+            "REMOVED": "CHANGE_REMOVES_REQUIREMENT",
+            "RENAMED": "CHANGE_MODIFIES_REQUIREMENT",
+        }
+        relation = rel_map.get(delta_type.upper(), "CHANGE_MODIFIES_REQUIREMENT")
+        self.connect_entities(relation, change_id, req_id)
+
+        return delta_id
+
 
 # ---------------------------------------------------------------------------
 # Async helpers and read-only async graph wrapper
