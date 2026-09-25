@@ -13,3 +13,4 @@ Each submodule registers tools against the shared MCPServer app exposed by
 # GraphRAG ask remains available on the HTTP /api/chat path.
 from . import structural  # noqa: F401  (registers tools on import)
 from . import security  # noqa: F401  (registers security tools on import)
+from . import genspec  # noqa: F401  (registers gen-spec tools on import)

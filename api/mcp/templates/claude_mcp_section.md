@@ -28,6 +28,13 @@ need to understand how symbols connect.
 | `get_fs_ops(project, tainted_only?)` | Investigate a **path_traversal** finding — list file-system calls that receive user-controlled input. | `get_fs_ops(project="myrepo", tainted_only=True)` |
 | `mark_vulnerability(project, package_name, status?)` | **Tag a package** after a CVE alert so subsequent `security_scan(rules=["cve"])` surfaces the blast radius. Use `status="clear"` once patched. | `mark_vulnerability(project="myrepo", package_name="requests")` |
 
+### Gen-spec tools
+
+| Tool | Call this when… | Example |
+|---|---|---|
+| `get_spec_context(project, capability, branch?)` | **Before every spec generation** — inspect the assembled context (docstrings, calls, auth, requirements) to verify the capability resolved correctly and the context is rich enough. Returns `{capability, entity_type, entity_path, context}` or `{error}`. No LLM call. | `get_spec_context(project="myrepo", capability="SourceAnalyzer")` |
+| `generate_spec(project, capability, branch?, llm_url?, llm_model?, dry_run?)` | **Generate** the spec draft. Returns `{capability, spec_md}` — write `spec_md` to `openspec/specs/<slug>/spec.md`. Pass `dry_run=True` to inspect the context packet without calling the LLM. | `generate_spec(project="myrepo", capability="SourceAnalyzer")` |
+
 ## Security analysis workflow
 
 ```
@@ -56,6 +63,22 @@ need to understand how symbols connect.
    security_scan(rules=["xss",…])        ← verify zero findings
 ```
 
+## Generate a spec workflow
+
+```
+1. list_spec_candidates(project)
+         │  → ready-to-loop list, recommended=True items first
+         │
+2. get_spec_context(project, capability)
+         │  → check entity_type, [DOCSTRING], [CALLS]
+         │  → if both are "(none)", skip or try a more specific name
+         │
+3. generate_spec(project, capability)
+         │  → receive spec_md string
+         │
+4. write spec_md to openspec/specs/<slug>/spec.md
+```
+
 ## Rules of thumb
 
 1. **Start with `search_code` or `find_symbol`** to turn names into ids. Most tools take a `symbol_id`.
@@ -68,7 +91,12 @@ need to understand how symbols connect.
    directly with `read_file` to navigate to the exact call site without a
    separate `find_symbol` round-trip.
 6. **After fixing, re-index and re-scan** to confirm zero findings.
-7. **Response shape.** Tools that return collections put the array in
+7. **Always `get_spec_context` before `generate_spec`.** If `[DOCSTRING]` and
+   `[CALLS]` are both `(none)` the spec will be thin — try a more specific
+   capability name (e.g. `fetch_runs` instead of `tekton_scraper`).
+8. **`generate_spec` returns `spec_md`** — write it to
+   `openspec/specs/<slug>/spec.md` yourself using your file-write tool.
+9. **Response shape.** Tools that return collections put the array in
    `structuredContent.result` per the MCP spec. `index_repo` and
    `mark_vulnerability` return a single object.
 
