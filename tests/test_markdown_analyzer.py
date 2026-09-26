@@ -1,7 +1,10 @@
 """Tests for MarkdownAnalyzer — MarkdownSection and Requirement extraction."""
 
+from pathlib import Path
+from unittest.mock import MagicMock
 
-from api.analyzers.markdown.analyzer import parse_markdown
+from api.analyzers.markdown.analyzer import MarkdownAnalyzer, parse_markdown
+from api.analyzers.source_analyzer import _MARKDOWN_EXTENSIONS, SourceAnalyzer
 
 
 class TestParseMarkdown:
@@ -74,3 +77,59 @@ class TestParseMarkdown:
             md = f"## {m} /api/resource\n"
             sections = parse_markdown(md)
             assert sections[0].route[0] == m
+
+
+class TestMarkdownAnalyzer:
+    def test_analyze_file_creates_sections_and_requirements(self, tmp_path: Path):
+        for ext in _MARKDOWN_EXTENSIONS:
+            md_file = tmp_path / f"doc{ext}"
+            md_file.write_text(
+                "## Section Heading\n- Requirement 1\n- Requirement 2\n",
+                encoding="utf-8",
+            )
+            mock_graph = MagicMock()
+            mock_graph.add_markdown_section.return_value = 42
+
+            analyzer = MarkdownAnalyzer()
+            analyzer.analyze_file(md_file, mock_graph)
+
+            mock_graph.add_markdown_section.assert_called_once_with(
+                title="Section Heading",
+                level=2,
+                path=str(md_file),
+                src_line=1,
+                route_method=None,
+                route_path=None,
+            )
+            assert mock_graph.add_requirement.call_count == 2
+            mock_graph.add_requirement.assert_any_call(
+                text="Requirement 1",
+                path=str(md_file),
+                src_line=2,
+                section_id=42,
+            )
+            mock_graph.add_requirement.assert_any_call(
+                text="Requirement 2",
+                path=str(md_file),
+                src_line=3,
+                section_id=42,
+            )
+
+
+class TestSourceAnalyzerMarkdownExtensions:
+    def test_security_pass_processes_all_markdown_extensions(self, tmp_path: Path):
+        sa = SourceAnalyzer()
+        mock_graph = MagicMock()
+        mock_graph._query.return_value.result_set = []
+
+        files: list[Path] = []
+        for ext in _MARKDOWN_EXTENSIONS:
+            doc = tmp_path / f"sample{ext}"
+            doc.write_text("## Auth\n- Verify token\n", encoding="utf-8")
+            files.append(doc)
+
+        mock_graph.add_markdown_section.return_value = 100
+        sa.security_pass(mock_graph, files, tmp_path)
+
+        assert mock_graph.add_markdown_section.call_count == len(_MARKDOWN_EXTENSIONS)
+        assert mock_graph.add_requirement.call_count == len(_MARKDOWN_EXTENSIONS)

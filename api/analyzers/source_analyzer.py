@@ -31,6 +31,9 @@ _html_analyzer = HtmlAnalyzer()
 _markdown_analyzer = MarkdownAnalyzer()
 _openspec_analyzer = OpenSpecAnalyzer()
 
+# Markdown document extensions
+_MARKDOWN_EXTENSIONS = ('.md', '.markdown', '.mdown', '.mkd', '.mdwn')
+
 # List of available analyzers (AbstractAnalyzer subclasses)
 analyzers: dict[str, AbstractAnalyzer] = {
     # '.c': CAnalyzer(),
@@ -106,7 +109,7 @@ class SourceAnalyzer():
 
         for file_path in files:
             # --- Markdown (T5) ---
-            if file_path.suffix == ".md":
+            if file_path.suffix in _MARKDOWN_EXTENSIONS:
                 # Skip files under openspec/ — handled exclusively by OpenSpecAnalyzer
                 fp_posix = str(file_path).replace("\\", "/")
                 if "/openspec/" in fp_posix or fp_posix.endswith("/openspec"):
@@ -469,6 +472,10 @@ class SourceAnalyzer():
             + list(path.rglob("*.jinja2"))
             + list(path.rglob("*.j2"))
             + list(path.rglob("*.md"))
+            + list(path.rglob("*.markdown"))
+            + list(path.rglob("*.mdown"))
+            + list(path.rglob("*.mkd"))
+            + list(path.rglob("*.mdwn"))
         )
         # Filter ignored patterns upfront
         default_ignore = [".git", "node_modules", "venv", ".venv", "__pycache__", "build", "dist", ".tox", "site-packages"]

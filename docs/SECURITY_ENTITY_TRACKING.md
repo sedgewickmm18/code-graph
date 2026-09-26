@@ -26,7 +26,7 @@ vulnerability can be detected with Cypher queries directly against the indexed g
 | `Decorator` | A decorator applied to a Python function / route | Python analyzer |
 | `Package` | A pip dependency declared in `requirements.txt` / `pyproject.toml` | Python analyzer |
 | `ExternalFunction` | A function inside a venv `site-packages` path | Python analyzer |
-| `MarkdownSection` | An H2/H3 heading in a `.md` documentation file | Markdown analyzer |
+| `MarkdownSection` | An H2/H3 heading in a Markdown document (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mdwn`) | Markdown analyzer |
 | `Requirement` | A bullet-point security requirement in a doc | Markdown analyzer |
 | `FileSystemOp` | A call to `open()`, `os.path.join()`, `pathlib.Path()`, etc. | Python analyzer |
 
@@ -57,7 +57,7 @@ vulnerability can be detected with Cypher queries directly against the indexed g
         ┌────────────┼───────────────────────┐
         ▼            ▼                        ▼
  PythonAnalyzer  HtmlAnalyzer          MarkdownAnalyzer
- (.py)           (.html/.jinja2/.j2)   (.md)
+ (.py)           (.html/.jinja2/.j2)   (.md/.markdown/.mdown/.mkd/.mdwn)
         │            │                        │
         │  Variable  │  HtmlElement           │  MarkdownSection
         │  Decorator │  HtmlForm              │  Requirement
@@ -174,7 +174,7 @@ RETURN fs.op AS Operation, fs.src_file, fs.src_line, src.name AS TaintSource
 | File | Change |
 |---|---|
 | `api/analyzers/python/analyzer.py` | Decorator, Variable, Package, ExternalFunction, FileSystemOp extraction |
-| `api/analyzers/source_analyzer.py` | Register `.html`, `.jinja2`, `.j2`, `.md` extensions |
+| `api/analyzers/source_analyzer.py` | Register `.html`, `.jinja2`, `.j2`, and Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mdwn`) extensions |
 | `api/graph.py` | Helper methods: `add_decorator`, `add_package`, `add_html_element`, `add_variable`, `add_fs_op`, `add_external_function` |
 | `api/index.py` | New `/api/security_scan` endpoint; new labels in `/api/graph_entities` |
 | `api/mcp/tools/__init__.py` | Register security tool module |

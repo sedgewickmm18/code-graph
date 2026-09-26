@@ -408,7 +408,7 @@ curl http://127.0.0.1:5000/api/list_repos
 | `.js` | JavaScript | Functions, classes, methods |
 | `.kt`, `.kts` | Kotlin | Classes, functions |
 | `.html`, `.jinja2`, `.j2` | HTML/Jinja2 | `HtmlElement`, `HtmlForm`, `{{ var }}` refs |
-| `.md` | Markdown | `MarkdownSection`, `Requirement`, route detection |
+| `.md`, `.markdown`, `.mdown`, `.mkd`, `.mdwn` | Markdown | `MarkdownSection`, `Requirement`, route detection |
 | `openspec/` tree | OpenSpec | `OpenSpecCapability`, `OpenSpecRequirement`, `OpenSpecScenario`, `OpenSpecChange`, `OpenSpecTask`, `OpenSpecDeltaSpec` |
 
 A C analyzer exists in the source tree but is commented out and not currently registered.
@@ -450,7 +450,7 @@ When a repository is indexed, code-graph automatically extracts **security-relev
 | `Decorator` | A decorator applied to a Python function or route handler |
 | `Package` | A pip dependency declared in `requirements.txt` / `pyproject.toml` |
 | `ExternalFunction` | A function inside a venv `site-packages` path |
-| `MarkdownSection` | An H2/H3 heading in a `.md` documentation file |
+| `MarkdownSection` | An H2/H3 heading in a Markdown document (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mdwn`) |
 | `Requirement` | A bullet-point security requirement in a doc |
 | `FileSystemOp` | A call to `open()`, `os.path.join()`, `pathlib.Path()`, etc. |
 
