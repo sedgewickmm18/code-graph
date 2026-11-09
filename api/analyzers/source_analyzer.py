@@ -477,9 +477,20 @@ class SourceAnalyzer():
             + list(path.rglob("*.mkd"))
             + list(path.rglob("*.mdwn"))
         )
-        # Filter ignored patterns upfront
-        default_ignore = [".git", "node_modules", "venv", ".venv", "__pycache__", "build", "dist", ".tox", "site-packages"]
-        combined_ignore = list(set(ignore + default_ignore))
+        # Load project configuration (.cgraph.json / .cgraphignore / env)
+        from ..config import load_config
+        cfg = load_config(path)
+        combined_ignore = list(set((ignore or []) + cfg.ignore))
+
+        # Apply resolver settings to analyzers
+        if ".java" in analyzers and hasattr(analyzers[".java"], "_ts_resolver"):
+            java_res = cfg.resolvers.get("java", "tree_sitter")
+            if java_res == "lsp":
+                analyzers[".java"]._ts_resolver = None
+            elif java_res in ("tree_sitter", "") and analyzers[".java"]._ts_resolver is None:
+                from .java.ts_resolver import TreeSitterJavaResolver
+                analyzers[".java"]._ts_resolver = TreeSitterJavaResolver(analyzers[".java"].language)
+
         files = [
             f for f in raw_files
             if not any(ign in str(f) or ign in f.parts for ign in combined_ignore)

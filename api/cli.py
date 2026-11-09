@@ -431,21 +431,33 @@ def info(
 _TEMPLATES_DIR = Path(__file__).parent / "mcp" / "templates"
 
 
+@app.command("init")
+def init(
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing configuration and guidance files."
+    ),
+) -> None:
+    """Initialize code-graph configuration (.cgraph.json) and agent guidance in CWD."""
+    init_agent(force=force)
+
+
 @app.command("init-agent")
 def init_agent(
     force: bool = typer.Option(
-        False, "--force", "-f", help="Overwrite existing CLAUDE.md / .cursorrules."
+        False, "--force", "-f", help="Overwrite existing CLAUDE.md / .cursorrules / .cgraph.json."
     ),
 ) -> None:
-    """Drop AI-agent guidance files (CLAUDE.md, .cursorrules) into CWD.
+    """Drop AI-agent guidance files (CLAUDE.md, .cursorrules) and .cgraph.json into CWD.
 
-    Copies the canonical code-graph MCP guidance bundled with this
-    package so any repo can announce the tools to Cursor and Claude
-    Code with one command.
+    Copies the canonical code-graph MCP guidance and default indexing settings
+    bundled with this package so any repo is ready for fast indexing and agent tools.
     """
+    from .config import get_default_config_template
+
     targets = {
-        "CLAUDE.md": _TEMPLATES_DIR / "claude_mcp_section.md",
-        ".cursorrules": _TEMPLATES_DIR / "cursorrules.template",
+        "CLAUDE.md": (_TEMPLATES_DIR / "claude_mcp_section.md").read_text(encoding="utf-8"),
+        ".cursorrules": (_TEMPLATES_DIR / "cursorrules.template").read_text(encoding="utf-8"),
+        ".cgraph.json": get_default_config_template(),
     }
 
     cwd = Path.cwd()
@@ -458,9 +470,9 @@ def init_agent(
             )
 
     written: List[str] = []
-    for name, template in targets.items():
+    for name, content in targets.items():
         dest = cwd / name
-        dest.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+        dest.write_text(content, encoding="utf-8")
         written.append(str(dest))
         _stderr(f"Wrote {dest}")
 
