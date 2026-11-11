@@ -21,6 +21,10 @@ app = typer.Typer(
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
+def _truthy(val: Optional[str]) -> bool:
+    return (val or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _stderr(msg: str) -> None:
     print(msg, file=sys.stderr)
 
@@ -86,6 +90,11 @@ def ensure_db() -> None:
         _stderr(f"FalkorDB already running on {host}:{port}")
         _json_out({"status": "ok", "host": host, "port": port})
         return
+
+    if not _truthy(os.getenv("FALKORDB_AUTO_START", "true")):
+        _json_error(
+            f"FalkorDB not reachable on {host}:{port} and FALKORDB_AUTO_START is disabled"
+        )
 
     # Only auto-start Docker for local hosts
     if host not in _LOCAL_HOSTS:

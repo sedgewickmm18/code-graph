@@ -46,6 +46,22 @@ def test_ensure_falkordb_runs_cgraph_when_unreachable(monkeypatch):
     assert args == ["cgraph", "ensure-db"]
 
 
+def test_ensure_falkordb_skips_docker_when_auto_start_disabled(monkeypatch):
+    from api.mcp import auto_init
+
+    monkeypatch.setenv("FALKORDB_HOST", "localhost")
+    monkeypatch.setenv("FALKORDB_PORT", "6379")
+    monkeypatch.setenv("FALKORDB_AUTO_START", "false")
+
+    with patch.object(auto_init, "_falkordb_reachable", return_value=False), \
+         patch("api.mcp.auto_init.subprocess.run") as mock_run:
+        status = auto_init.ensure_falkordb()
+
+    assert status["status"] == "error"
+    assert "FALKORDB_AUTO_START is disabled" in status["message"]
+    mock_run.assert_not_called()
+
+
 def test_ensure_falkordb_skips_docker_for_remote_host(monkeypatch):
     """Auto-start is localhost-only by design."""
     from api.mcp import auto_init
@@ -131,9 +147,10 @@ def test_detect_branch_returns_branch_name():
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(monkeypatch):
     from api.mcp.auto_init import reset_auto_index_cache
 
+    monkeypatch.delenv("ALLOWED_ANALYSIS_DIR", raising=False)
     reset_auto_index_cache()
     yield
     reset_auto_index_cache()

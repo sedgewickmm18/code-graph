@@ -4,8 +4,10 @@ Requires FalkorDB running on localhost:6379 (same as the rest of the test suite)
 """
 
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
@@ -42,6 +44,15 @@ class TestCLIEnsureDB(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         data = _parse_json(result.output)
         self.assertEqual(data["status"], "ok")
+
+    @patch("api.cli._check_connection", return_value=False)
+    @patch.dict(os.environ, {"FALKORDB_AUTO_START": "false"})
+    def test_ensure_db_disabled_auto_start(self, _mock_check):
+        result = runner.invoke(app, ["ensure-db"])
+        self.assertEqual(result.exit_code, 1)
+        data = _parse_json(result.output)
+        self.assertEqual(data["status"], "error")
+        self.assertIn("FALKORDB_AUTO_START is disabled", data["message"])
 
 
 class TestCLIIndex(unittest.TestCase):

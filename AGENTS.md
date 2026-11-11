@@ -106,6 +106,7 @@ Key variables (see `.env.template` for full list):
 |----------|---------|---------|
 | `FALKORDB_HOST` | `localhost` | Graph DB host |
 | `FALKORDB_PORT` | `6379` | Graph DB port |
+| `FALKORDB_AUTO_START` | `true` | Auto-start FalkorDB Docker container if unreachable |
 | `SECRET_TOKEN` | empty | API auth token |
 | `CODE_GRAPH_PUBLIC` | `0` | Skip auth on read endpoints when `1` |
 | `MODEL_NAME` | `gemini/gemini-flash-lite-latest` | LiteLLM model for chat |

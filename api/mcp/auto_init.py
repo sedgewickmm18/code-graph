@@ -93,6 +93,14 @@ def ensure_falkordb() -> dict:
     if _falkordb_reachable(host, port):
         return {"status": "ok", "host": host, "port": port, "action": "none"}
 
+    if not _truthy(os.getenv("FALKORDB_AUTO_START", "true")):
+        return {
+            "status": "error",
+            "host": host,
+            "port": port,
+            "message": "FalkorDB unreachable and FALKORDB_AUTO_START is disabled",
+        }
+
     if host not in _LOCAL_HOSTS:
         return {
             "status": "error",

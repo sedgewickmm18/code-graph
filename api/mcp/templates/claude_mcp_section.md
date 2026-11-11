@@ -106,4 +106,5 @@ need to understand how symbols connect.
   default; opt-in because indexing big repos takes minutes).
 - `FALKORDB_HOST` / `FALKORDB_PORT` — defaults to `localhost:6379`. If
   unreachable on localhost, the server runs `cgraph ensure-db` to
-  spin up the official Docker image.
+  spin up the official Docker image (unless `FALKORDB_AUTO_START=false`).
+- `FALKORDB_AUTO_START=false` — disable automatic Docker container start.

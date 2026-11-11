@@ -91,6 +91,7 @@ cp .env.template .env
 | `CODE_GRAPH_DB_BACKEND` | Database backend: `falkordb` or `lite` | No | `falkordb` |
 | `FALKORDB_HOST` | FalkorDB hostname | No | `localhost` |
 | `FALKORDB_PORT` | FalkorDB port | No | `6379` |
+| `FALKORDB_AUTO_START` | Auto-start FalkorDB Docker container if unreachable on localhost | No | `true` |
 | `FALKORDB_USERNAME` | Optional FalkorDB username | No | empty |
 | `FALKORDB_PASSWORD` | Optional FalkorDB password | No | empty |
 | `FALKORDB_LITE_PATH` | FalkorDBLite database file path | No | `~/.cache/code-graph/falkordblite.rdb` |
